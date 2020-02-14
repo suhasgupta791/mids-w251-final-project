@@ -1,0 +1,6 @@
+Natural Language Decathlon: Multitask Learning as Question Answering: https://arxiv.org/abs/1806.08730
+https://github.com/salesforce/decaNLP
+Approach: Use BERT for transfer learning, then layering decaNLP on top of it. 
+
+Approach: Detect sarcasm in long-form forum comments. Improve previous models based on Reddit comments
+Large reddit dataset of sarcasm - https://arxiv.org/pdf/1704.05579.pdf
