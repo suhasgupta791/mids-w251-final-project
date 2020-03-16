@@ -1,0 +1,7 @@
+ijson
+numpy
+pandas
+torch
+torchvision
+torchvision
+tensorflow==1.4.0
