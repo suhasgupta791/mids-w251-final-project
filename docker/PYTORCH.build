@@ -13,7 +13,8 @@ RUN pip install scikit-learn
 RUN pip install tensorflow-gpu
 RUN pip install keras
 RUN pip install transformers
-RUN pip install torchsummary torchtext
+RUN pip install torchsummary torchtext 
+RUN pip install future
 RUN pip install pytorch-pretrained-bert
 
 WORKDIR /root
