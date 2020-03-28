@@ -21,4 +21,6 @@ WORKDIR /root
 RUN git clone https://github.com/NVIDIA/apex.git && cd apex && python setup.py install --cuda_ext --cpp_ext && cd ..
 
 EXPOSE 8888
+EXPOSE 6006
+EXPOSE 8000
 CMD jupyter notebook --no-browser --ip=0.0.0.0 --allow-root
