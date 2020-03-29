@@ -133,3 +133,4 @@ tut6-model.pt
 .data
 .keras
 .DS_Store
+logs/*

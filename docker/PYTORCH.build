@@ -10,12 +10,17 @@ RUN pip install seaborn
 RUN pip install nltk
 RUN pip install pandas
 RUN pip install scikit-learn
-RUN pip install tensorflow-gpu
+# uninstall tensorflow 2.0 if install
+RUN pip uninstall tensorflow-gpu>=2.0
+RUN pip uninstall tensorflow>=1.15
+
+RUN pip install tensorflow-gpu==1.14
 RUN pip install keras
 RUN pip install transformers
 RUN pip install torchsummary torchtext 
 RUN pip install future
 RUN pip install pytorch-pretrained-bert
+RUN pip install onnx onnx-tf
 
 WORKDIR /root
 RUN git clone https://github.com/NVIDIA/apex.git && cd apex && python setup.py install --cuda_ext --cpp_ext && cd ..
