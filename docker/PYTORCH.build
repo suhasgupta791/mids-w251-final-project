@@ -10,12 +10,14 @@ RUN pip install seaborn
 RUN pip install nltk
 RUN pip install pandas
 RUN pip install scikit-learn
-RUN pip install tensorflow-gpu
+#RUN pip install tensorflow-gpu
+RUN pip install tensorflow==2.1.0
 RUN pip install keras
 RUN pip install transformers
 RUN pip install torchsummary torchtext 
 RUN pip install future
 RUN pip install pytorch-pretrained-bert
+RUN pip install onnx onnx_tf
 
 WORKDIR /root
 RUN git clone https://github.com/NVIDIA/apex.git && cd apex && python setup.py install --cuda_ext --cpp_ext && cd ..

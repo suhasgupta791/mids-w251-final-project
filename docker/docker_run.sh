@@ -6,6 +6,6 @@ docker run -d \
 	-v /tmp:/tmp \
 	-p 8888:8888 \
 	-p 8000:8000 \
-	-p 6006:6006 \
-	--name=w251-project \
+	-p 6007:6006 \
+	--name=w251-project-sheel \
 	pytorch_cuda
