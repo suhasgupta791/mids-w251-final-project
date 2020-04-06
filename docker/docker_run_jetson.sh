@@ -10,5 +10,5 @@ docker run -d \
 	--gpus all \
 	--privileged \
 	--name=w251-project \
-	inference_tf_pytorch
-	#tensorrt_project
+	-t transformers_jetson
+	/bin/bash
