@@ -10,17 +10,14 @@ RUN pip install seaborn
 RUN pip install nltk
 RUN pip install pandas
 RUN pip install scikit-learn
-# uninstall tensorflow 2.0 if install
-RUN pip uninstall tensorflow-gpu>=2.0
-RUN pip uninstall tensorflow>=1.15
-
-RUN pip install tensorflow-gpu==1.14
+#RUN pip install tensorflow-gpu
+RUN pip install tensorflow==2.1.0
 RUN pip install keras
 RUN pip install transformers
 RUN pip install torchsummary torchtext 
 RUN pip install future
 RUN pip install pytorch-pretrained-bert
-RUN pip install onnx onnx-tf
+RUN pip install argparse logger
 
 WORKDIR /root
 RUN git clone https://github.com/NVIDIA/apex.git && cd apex && python setup.py install --cuda_ext --cpp_ext && cd ..
@@ -28,4 +25,5 @@ RUN git clone https://github.com/NVIDIA/apex.git && cd apex && python setup.py i
 EXPOSE 8888
 EXPOSE 6006
 EXPOSE 8000
-CMD jupyter notebook --no-browser --ip=0.0.0.0 --allow-root
+#CMD jupyter notebook --no-browser --ip=0.0.0.0 --allow-root
+CMD [ "exec" -c "$@"]
