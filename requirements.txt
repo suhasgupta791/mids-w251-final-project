@@ -1,8 +1,0 @@
-ijson
-numpy
-pandas
-torch
-torchvision
-torchvision
-tensorflow-gpu
-transformers
