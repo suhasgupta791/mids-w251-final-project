@@ -57,18 +57,26 @@ def main():
                         type=str,
                         required=True,
                         help="The input data dir. Should contain the .csv files (or other data files) for the task.")
+
     parser.add_argument("--bert_model", default=None, type=str, required=True,
                         help="Bert pre-trained model selected in the list: bert-base-uncased, "
                         "bert-large-uncased, bert-base-cased, bert-large-cased, bert-base-multilingual-uncased, "
                         "bert-base-multilingual-cased, bert-base-chinese.")
+
     parser.add_argument("--bert_model_path", default=None, type=str, required=False,
                         help="Directory containing the converterd pytorch bert model on disk.")
+
     parser.add_argument("--output_dir",
                         default=None,
                         type=str,
                         required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
-
+    parser.add_argument("--train_file",
+                        default=None,
+                        type=str,
+                        required=False,
+                        help="The input training file name. Must be provided if --do_train is set.")
+    
     ## Other parameters
     parser.add_argument("--max_seq_length",
                         default=128,
@@ -180,34 +188,36 @@ def main():
 
     # Load data
     data_path = args.data_dir
-    #train_file_name = data_path+'small_train.csv'
-    #test_file_name  = data_path+'small_test.csv'
-    train_file_name = data_path+'balanced_train.csv'
-    # test_file_name  = data_path+'balanced_test.csv'
-    all_train_df = pd.read_csv(train_file_name)
-    #test_df = pd.read_csv(test_file_name)
+    if args.do_train:
+        #train_file_name = data_path+'small_train.csv'
+        #test_file_name  = data_path+'small_test.csv'
+        #train_file_name = data_path+'balanced_train.csv'
+        # test_file_name  = data_path+'balanced_test.csv'
+        if not args.train_file:
+            raise ValueError("Training file name must be specified if --do_train is set")
+        train_file_path = args.data_dir+"/"+args.train_file
+        all_train_df = pd.read_csv(train_file_path)
+        #test_df = pd.read_csv(test_file_name)
 
-    
-    # Create a train, valid split
-    train_data,train_labels,valid_data,valid_labels = createTestTrainSplit(all_train_df, test_size=0.2,seed=seed)
+        # Create a train, valid split
+        train_data,train_labels,valid_data,valid_labels = createTestTrainSplit(all_train_df, test_size=0.2,seed=seed)
 
-    train_size,valid_size= len(train_data),len(valid_data)
-    print(train_size,valid_size)
+        train_size,valid_size= len(train_data),len(valid_data)
+        print(train_size,valid_size)
 
-    # Create a model object
-    bert_model1=Bert_Model(train_df=train_data,
+        # Create a model object
+        bert_model1=Bert_Model(train_df=train_data,
                           bert_model_name=bert_model_name,
                           bert_model_path=bert_model_path,
                           tokenizer=tokenizer,
                           max_seq_length=max_seq_len)
 
-    print("--Tokenizing--")
-    train_data_tokenized,train_attention_mask = tokenize(tokenizer,train_data)
-    valid_data_tokenized,valid_attention_mask = tokenize(tokenizer,valid_data)
+        print("--Tokenizing--")
+        train_data_tokenized,train_attention_mask = tokenize(tokenizer,train_data)
+        valid_data_tokenized,valid_attention_mask = tokenize(tokenizer,valid_data)
 
-    #test_data_tokenized,test_attention_mask   = tokenize(tokenizer,test_data)
+        #test_data_tokenized,test_attention_mask   = tokenize(tokenizer,test_data)
     
-    if args.do_train:
         # Create data set for training
         train_dataset = CreateDataset(train_data_tokenized,train_attention_mask,train_labels)
         valid_dataset = CreateDataset(valid_data_tokenized,valid_attention_mask,valid_labels)
@@ -242,6 +252,9 @@ def main():
                                                         accumulation_steps=accumulation_steps,evaluation_steps=evaluation_steps,
                                                         logdir=logdir)
         print("Training Time:%0.5f seconds" %(time.time()-start))
+
+    
+
 
 if __name__ == "__main__":
     main()
