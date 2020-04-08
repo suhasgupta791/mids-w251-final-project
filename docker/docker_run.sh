@@ -1,8 +1,9 @@
 #!/bin/bash -f 
 
-docker run -d \
+nohup docker run -d \
 	--runtime nvidia \
 	-v $(pwd):/root \
+	-v /data_root:/data_root \
 	-v /tmp:/tmp \
 	-p 8888:8888 \
 	-p 8000:8000 \

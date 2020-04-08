@@ -119,7 +119,8 @@ class Bert_Model():
         if device == 'cuda' :
             model, optimizer = amp.initialize(model,optimizer,opt_level="O1",verbosity=0)
         ### Parallel GPU processing
-        model = DataParallelModel(model)
+        #model = DataParallelModel(model) # using balanced data parallalism script
+        model = torch.nn.DataParallel(model) # using native pytorch 	
         criterion = nn.CrossEntropyLoss()
         model = model.train()
         model.zero_grad()
@@ -135,6 +136,7 @@ class Bert_Model():
         
         tr_loss = 0.
         tr_accuracy = 0.
+        tr_auc = 0.
          
         tq = tqdm(range(EPOCHS),total=EPOCHS,leave=False)
         global_step = 0
@@ -147,23 +149,32 @@ class Bert_Model():
                                 attention_mask=attn_mask.to(device), 
                                 labels=y_batch.to(device))
                 y_pred = outputs[1]
+
+		# Apply the additional layers 
+		
                 
                 # Parallel GPU processing
-                parallel_loss_criterion = DataParallelCriterion(criterion)
-            
-#                 loss = criterion(y_pred,y_batch.to(device)) / accumulation_steps
-                loss = parallel_loss_criterion(y_pred,y_batch.to(device))/accumulation_steps
+                #parallel_loss_criterion = DataParallelCriterion(criterion)
+
+                loss = criterion(y_pred,y_batch.to(device)) / accumulation_steps # when using torch data parallel 
+                loss = loss.mean()  # Mean the loss from multiple GPUs
+                #loss = parallel_loss_criterion(y_pred,y_batch.to(device))/accumulation_steps # when using balanced data parallel script
                 
                 if device == 'cuda':
                     with amp.scale_loss(loss,optimizer) as scaled_loss:
                         scaled_loss.backward()
                 else:
                     loss.backward()
-                tk0.set_postfix(step=global_step+1,loss=loss.item(),accuracy=tr_accuracy) # display running loss
+                tk0.set_postfix(step=global_step+1,loss=loss.item(),auc=tr_auc,accuracy=tr_accuracy) # display running loss
     
                 tr_loss += loss.item()
                 acc = torch.mean(((torch.sigmoid(y_pred[:,1])>pred_thres) == (y_batch>pred_thres).to(device)).to(torch.float)).item()/len(train_dataLoader)
+                #auc = self.compute_auc_score(y_pred[:,1],y_batch.to(device))  # ROC AUC score
+                auc = self.compute_auc_score(y_pred.detach().cpu().numpy(),y_batch.cpu().numpy())  # ROC AUC score
+
                 tr_accuracy += acc
+                tr_auc += auc
+
                 if (step+1) % accumulation_steps == 0:          # Wait for several backward steps
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # clip the norm to 1.0 to prevent exploding gradients
                     optimizer.step()                            # Now we can do an optimizer step
@@ -175,28 +186,31 @@ class Bert_Model():
                                 'step': global_step,
                                 'train_loss': tr_loss/global_step,
                                 'train_acc': tr_accuracy/global_step,
+                                'train_auc': tr_auc/global_step,
                             })
                     # Write training stats to tensorboard
-                    self.summaryWriter("train",loss.item(),acc,global_step+1,logdir)            
+                    self.summaryWriter("train",loss.item(),acc,auc,global_step+1,logdir)            
                     # Run evaluation when no gradients are accumulated
                     if (step+1) % evaluation_steps ==0:
                         print("--I-- Running Validation")
-                        eval_loss,eval_accuracy=self.run_eval(model,valid_dataLoader,global_step,criterion)
+                        eval_loss,eval_accuracy,eval_auc=self.run_eval(model,valid_dataLoader,global_step,criterion)
                         validation_stats.append(
                             {
                                 'step': global_step,
                                 'valid_loss': eval_loss,
-                                'Training Accuracy': eval_accuracy,
+                                'valid accuracy': eval_accuracy,
+                                'valid auc score': eval_auc,
                             })
                         # Write training stats to tensorboard
-                        self.summaryWriter("eval",eval_loss,eval_accuracy,global_step,logdir)
-            tq.set_postfix(train_loss=tr_loss/(global_step+1),train_accuracy=tr_accuracy/global_step)
+                        self.summaryWriter("eval",eval_loss,eval_accuracy,eval_auc,global_step,logdir)
+            tq.set_postfix(train_loss=tr_loss/(global_step+1),train_accuracy=tr_accuracy/(global_step+1),train_auc=tr_auc/(global_step+1))
         return model,training_stats,validation_stats
     
     def run_eval(self,model,valid_dataLoader,global_step,criterion):
         avg_loss = 0.
         eval_accuracy = 0.
         eval_loss = 0.
+        eval_auc = 0.
         nb_eval_steps = 0
         lossf=None
         tk0 = tqdm(enumerate(valid_dataLoader),total=len(valid_dataLoader),leave=True)
@@ -211,7 +225,10 @@ class Bert_Model():
             loss = criterion(y_pred,y_batch.to(device))
             y_pred = y_pred.detach().cpu().numpy()
             label_ids = y_batch.to('cpu').numpy()
+
             tmp_eval_accuracy = self.flat_accuracy(y_pred, label_ids)
+            tmp_eval_auc = self.compute_auc_score(y_pred, label_ids) ## ROC AUC Score
+
             if lossf:
                 lossf = 0.98*lossf+0.02*loss.item()
             else:
@@ -219,21 +236,28 @@ class Bert_Model():
             # Accumulate the total accuracy.
             eval_loss += lossf/len(valid_dataLoader)
             eval_accuracy += tmp_eval_accuracy/len(valid_dataLoader)
+            eval_auc += tmp_eval_auc/len(valid_dataLoader)
             nb_eval_steps += 1
         avg_loss = eval_loss/nb_eval_steps
         avg_accuracy = eval_accuracy/nb_eval_steps
-        tk0.set_postfix(step=global_step,avg_loss=avg_loss,avg_accuracy=avg_accuracy)
-        return avg_loss,avg_accuracy
+        avg_auc = eval_auc/nb_eval_steps
+        tk0.set_postfix(step=global_step,avg_loss=avg_loss,avg_accuracy=avg_accuracy,avg_auc=avg_auc)
+        return avg_loss,avg_accuracy,avg_auc
 
      # Function to calculate the accuracy of predictions vs labels
     def flat_accuracy(self,preds,labels):
         pred_flat = np.argmax(preds, axis=1).flatten()
         labels_flat = labels.flatten()
         return np.sum(pred_flat == labels_flat)
+
+    def compute_auc_score(self,preds,labels):
+        auc_score = roc_auc_score(labels.flatten(),preds[:,1].flatten())
+        return auc_score
     
-    def summaryWriter(self,name,loss,acc,n_iter,logdir):
+    def summaryWriter(self,name,loss,acc,auc,n_iter,logdir):
         # Writer will output to ./runs/ directory by default
         writer = SummaryWriter(logdir)
         writer.add_scalar('Loss/'+name,loss,n_iter)
         writer.add_scalar('Accuracy/'+name,acc,n_iter)
+        writer.add_scalar('ROC AUC Score/'+name,auc,n_iter)
         writer.close()
