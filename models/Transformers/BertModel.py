@@ -212,7 +212,6 @@ class Bert_Model():
         eval_loss = 0.
         eval_auc = 0.
         nb_eval_steps = 0
-        lossf=None
         tk0 = tqdm(enumerate(valid_dataLoader),total=len(valid_dataLoader),leave=True)
         for step,(x_batch, attn_mask,y_batch) in tk0:
             model.eval()
@@ -229,14 +228,13 @@ class Bert_Model():
             tmp_eval_accuracy = self.flat_accuracy(y_pred, label_ids)
             tmp_eval_auc = self.compute_auc_score(y_pred, label_ids) ## ROC AUC Score
 
-            if lossf:
-                lossf = 0.98*lossf+0.02*loss.item()
-            else:
-                lossf = loss.item()
+            loss = criterion(y_pred,y_batch.to(device)) / accumulation_steps # when using torch data parallel 
+            loss = loss.mean()  # Mean the loss from multiple GPUs
+
             # Accumulate the total accuracy.
-            eval_loss += lossf/len(valid_dataLoader)
+            eval_loss += loss/len(valid_dataLoader)
             eval_accuracy += tmp_eval_accuracy/len(valid_dataLoader)
-            eval_auc += tmp_eval_auc/len(valid_dataLoader)
+            eval_auc += tmp_eval_auc
             nb_eval_steps += 1
         avg_loss = eval_loss/nb_eval_steps
         avg_accuracy = eval_accuracy/nb_eval_steps
