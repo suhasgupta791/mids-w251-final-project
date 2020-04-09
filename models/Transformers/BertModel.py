@@ -172,10 +172,7 @@ class Bert_Model():
                 tr_loss += loss.item()/accumulation_steps  # accumulate the global loss (divide by gloabal step to reflect moving average)
                 
                 # Accuracy
-                if step>0:
-                    acc = torch.mean((predicted_labels == y_batch.to(device)).to(torch.float)).item()  # accuracy for the whole batch
-                else:
-                    acc = 0
+                acc = torch.mean((predicted_labels == y_batch.to(device)).to(torch.float)).item()  # accuracy for the whole batch
                 tr_accuracy += acc/accumulation_steps
                 # AUC Score
                 c_report_dict = self.class_report(predicted_labels,y_batch)
@@ -184,6 +181,8 @@ class Bert_Model():
                 tr_f1 +=f1_score/accumulation_steps
                 auc = self.compute_auc_score(y_pred[:,1],y_batch)
                 tr_auc += auc/accumulation_steps
+
+                tk0.set_postfix(step=global_step+1,loss=loss.item(),accuracy=acc) # display running backward loss
 
                 tk0.set_postfix(step=global_step+1,loss=loss.item(),accuracy=acc) # display running backward loss
 
@@ -308,5 +307,4 @@ class Bert_Model():
         writer.add_scalar('Accuracy/'+name,acc,n_iter)
         writer.add_scalar('ROC_AUC_Score/'+name,auc,n_iter)
         writer.add_scalar('F1_Score/'+name,f1_score,n_iter)
-
         writer.close()
