@@ -255,8 +255,9 @@ def main():
                                                         logdir=logdir)
         print("Training Time:%0.5f seconds" %(time.time()-start))
 
-    
+        # Save the model
+        model.save(args.output_dir+"/trained_model.bin")
 
-
+        
 if __name__ == "__main__":
     main()
