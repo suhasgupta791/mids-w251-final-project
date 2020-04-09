@@ -38,15 +38,6 @@ from models.Transformers.BertModel import *
 # Import utils
 from utils.utils import *
 
-# Check if cuda is available
-# Set the device and empty cache
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-if device =='cuda':
-    from apex import amp
-    torch.cuda.empty_cache()
-
-print(device)
-
 def main():
 
     parser = argparse.ArgumentParser()
@@ -143,9 +134,14 @@ def main():
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
         n_gpu = torch.cuda.device_count()
+        if device =='cuda':
+            from apex import amp
+            torch.cuda.empty_cache()
     else:
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
+        from apex import amp
+        torch.cuda.empty_cache()
         n_gpu = 1
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.distributed.init_process_group(backend='nccl')
@@ -155,7 +151,6 @@ def main():
     if args.gradient_accumulation_steps < 1:
         raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
                             args.gradient_accumulation_steps))
-    
 
     seed = random.seed(args.seed)
     np.random.seed(args.seed)
@@ -197,6 +192,7 @@ def main():
             raise ValueError("Training file name must be specified if --do_train is set")
         train_file_path = args.data_dir+"/"+args.train_file
         all_train_df = pd.read_csv(train_file_path)
+
         #test_df = pd.read_csv(test_file_name)
 
         # Create a train, valid split
@@ -241,10 +237,16 @@ def main():
         # Set the prediction threshold for classifying sarcasm
         PREDICTION_THRESHOLD=0.8
         start = time.time()
+
+        if args.learning_rate:
+            learning_rate = args.learning_rate
+        else:
+            learning_rate = 2e-5
+
         # Initialize the model
         model,optimizer,scheduler,criterion,EPOCHS = bert_model1.initialize_model_for_training(len(train_dataLoader),
                                                             EPOCHS=max_epochs,
-                                                            accumulation_steps=accumulation_steps)
+                                                            accumulation_steps=accumulation_steps,lr=learning_rate)
         # Train the model
         trained_model,training_stats,validation_stats=bert_model1.run_training(model,train_dataLoader,valid_dataLoader,
                                                         optimizer=optimizer,scheduler=scheduler,criterion=criterion,
@@ -252,9 +254,19 @@ def main():
                                                         accumulation_steps=accumulation_steps,evaluation_steps=evaluation_steps,
                                                         logdir=logdir)
         print("Training Time:%0.5f seconds" %(time.time()-start))
+        
+        # Save the model
+        torch.save(trained_model,args.output_dir+"/trained_model.pt")
 
-    
-
+        # Load and check model 
+        model = Bert_Model(train_df=train_data,
+                          bert_model_name=bert_model_name,
+                          bert_model_path=bert_model_path,
+                          tokenizer=tokenizer,
+                          max_seq_length=max_seq_len)
+        model = torch.load(args.output_dir+"/trained_model.pt")
+        model.eval()
+        print(model)
 
 if __name__ == "__main__":
     main()

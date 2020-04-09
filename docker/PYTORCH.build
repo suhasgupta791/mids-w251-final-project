@@ -18,6 +18,7 @@ RUN pip install torchsummary torchtext
 RUN pip install future
 RUN pip install pytorch-pretrained-bert
 RUN pip install argparse logger
+RUN pip install pandas
 
 WORKDIR /root
 RUN git clone https://github.com/NVIDIA/apex.git && cd apex && python setup.py install --cuda_ext --cpp_ext && cd ..
