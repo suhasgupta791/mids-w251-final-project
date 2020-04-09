@@ -115,20 +115,21 @@ class Bert_Model():
             ]
         num_train_optimization_steps = int(EPOCHS*dataset_len/batch_size/accumulation_steps)
         optimizer = AdamW(optimizer_grouped_parameters, lr=lr,eps=1e-8,correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
-        scheduler = get_linear_schedule_with_warmup(optimizer,num_warmup_steps=0,num_training_steps=num_train_optimization_steps)  # PyTorch scheduler
+        scheduler = get_linear_schedule_with_warmup(optimizer,num_warmup_steps=10,num_training_steps=num_train_optimization_steps)  # PyTorch scheduler
         if device == 'cuda' :
             model, optimizer = amp.initialize(model,optimizer,opt_level="O1",verbosity=0)
         ### Parallel GPU processing
         #model = DataParallelModel(model) # using balanced data parallalism script
         model = torch.nn.DataParallel(model) # using native pytorch 	
-        criterion = nn.CrossEntropyLoss()
+#        criterion = nn.CrossEntropyLoss()
+        criterion = nn.BCELoss()
         model = model.train()
         model.zero_grad()
         optimizer.zero_grad()
         return model,optimizer,scheduler,criterion,EPOCHS
     
     def run_training(self,model,train_dataLoader,valid_dataLoader,optimizer,scheduler,criterion,
-                     EPOCHS=1,batch_size=32,accumulation_steps=20,evaluation_steps=80,pred_thres=0.5,
+                     EPOCHS=1,tr_batch_size=32,accumulation_steps=20,evaluation_steps=80,pred_thres=0.5,
                      logdir='./logs'):
         # Data Structure for training statistics
         training_stats=[]
@@ -144,43 +145,57 @@ class Bert_Model():
             print("--Training--")
             tk0 = tqdm(enumerate(train_dataLoader),total=len(train_dataLoader),leave=True)
             for step,(x_batch,attn_mask,y_batch) in tk0:
-                outputs = model(x_batch.to(device), 
+                outputs = model(x_batch.to(device),
                                 token_type_ids=None, 
                                 attention_mask=attn_mask.to(device), 
                                 labels=y_batch.to(device))
-                y_pred = outputs[1]
+                lossf,y_pred = outputs
+                predicted_probs,predicted_labels = self.classifyWithThreshold(y_pred,y_batch)
 
-		# Apply the additional layers 
+		# Apply the additional layers
 		
                 
                 # Parallel GPU processing
                 #parallel_loss_criterion = DataParallelCriterion(criterion)
 
-                loss = criterion(y_pred,y_batch.to(device)) / accumulation_steps # when using torch data parallel 
-                loss = loss.mean()  # Mean the loss from multiple GPUs
+                # Loss
+                loss = criterion(predicted_probs,torch.tensor(y_batch, dtype=torch.float, device=device)) # when using torch data parallel
+                loss = loss.mean()  # Mean the loss from multiple GPUs and take care of the batch
                 #loss = parallel_loss_criterion(y_pred,y_batch.to(device))/accumulation_steps # when using balanced data parallel script
-                
+
                 if device == 'cuda':
                     with amp.scale_loss(loss,optimizer) as scaled_loss:
                         scaled_loss.backward()
                 else:
                     loss.backward()
-                tk0.set_postfix(step=global_step+1,loss=loss.item(),auc=tr_auc,accuracy=tr_accuracy) # display running loss
-    
-                tr_loss += loss.item()
-                acc = torch.mean(((torch.sigmoid(y_pred[:,1])>pred_thres) == (y_batch>pred_thres).to(device)).to(torch.float)).item()/len(train_dataLoader)
+                tr_loss += loss.item()/accumulation_steps  # accumulate the global loss (divide by gloabal step to reflect moving average)
+                
+                # Accuracy
+                if step>0:
+                    acc += torch.mean((predicted_labels == y_batch.to(device)).to(torch.float)).item()  # accuracy for the whole batch
+                else:
+                    acc = 0
+                tr_accuracy = acc/accumulation_steps
+                # AUC Score
                 #auc = self.compute_auc_score(y_pred[:,1],y_batch.to(device))  # ROC AUC score
-                auc = self.compute_auc_score(y_pred.detach().cpu().numpy(),y_batch.cpu().numpy())  # ROC AUC score
-
-                tr_accuracy += acc
+#                auc = self.compute_auc_score(y_pred.detach().cpu().numpy(),y_batch.cpu().numpy())  # ROC AUC score
+                auc = self.compute_auc_score(predicted_labels,y_batch)
                 tr_auc += auc
 
+                tk0.set_postfix(step=global_step+1,loss=loss.item(),accuracy=acc) # display running backward loss
+
                 if (step+1) % accumulation_steps == 0:          # Wait for several backward steps
+                    
+                    # Zero out the evaluation metrics after several backward steps
+                    acc = 0
+                    tr_loss = 0
+                    tr_auc = 0
+                    
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # clip the norm to 1.0 to prevent exploding gradients
                     optimizer.step()                            # Now we can do an optimizer step
                     scheduler.step()
                     model.zero_grad()
-                    global_step+=1
+                    global_step+=1  # increment forward step count
                     training_stats.append(
                             {
                                 'step': global_step,
@@ -189,8 +204,8 @@ class Bert_Model():
                                 'train_auc': tr_auc/global_step,
                             })
                     # Write training stats to tensorboard
-                    self.summaryWriter("train",loss.item(),acc,auc,global_step+1,logdir)            
-                    # Run evaluation when no gradients are accumulated
+                    self.summaryWriter("train",loss.item(),tr_accuracy,auc,global_step,logdir)
+                    #Run evaluation after several forward passes (determined by evaluation_steps)
                     if (step+1) % evaluation_steps ==0:
                         print("--I-- Running Validation")
                         eval_loss,eval_accuracy,eval_auc=self.run_eval(model,valid_dataLoader,global_step,criterion)
@@ -203,7 +218,7 @@ class Bert_Model():
                             })
                         # Write training stats to tensorboard
                         self.summaryWriter("eval",eval_loss,eval_accuracy,eval_auc,global_step,logdir)
-            tq.set_postfix(train_loss=tr_loss/(global_step+1),train_accuracy=tr_accuracy/(global_step+1),train_auc=tr_auc/(global_step+1))
+            tq.set_postfix(train_loss=tr_loss,train_accuracy=tr_accuracy,train_auc=tr_auc,leave=False)
         return model,training_stats,validation_stats
     
     def run_eval(self,model,valid_dataLoader,global_step,criterion):
@@ -221,24 +236,31 @@ class Bert_Model():
                                 attention_mask=attn_mask.to(device), 
                                 labels=y_batch.to(device))
             loss, y_pred = outputs
-            loss = criterion(y_pred,y_batch.to(device))
-            y_pred = y_pred.detach().cpu().numpy()
-            label_ids = y_batch.to('cpu').numpy()
+            predicted_probs,predicted_labels = self.classifyWithThreshold(y_pred,y_batch)
 
-            tmp_eval_accuracy = self.flat_accuracy(y_pred, label_ids)
-            tmp_eval_auc = self.compute_auc_score(y_pred, label_ids) ## ROC AUC Score
+            # Loss
+            loss = criterion(predicted_probs,torch.tensor(y_batch, dtype=torch.float, device=device)) # when using torch data parallel
+            loss = loss.mean()  # Mean the loss from multiple GPUs and to take care of batch size
+            eval_loss += loss.item()
+            
+            # Accuracy
+            # Accuracy
+            eval_accuracy += torch.mean((predicted_labels == y_batch.to(device)).to(torch.float)).item()  # accuracy for the whole batch
+            
+            # AUC Score
+            auc = self.compute_auc_score(predicted_labels,y_batch.to(device))
+            eval_auc += auc
 
-            loss = criterion(y_pred,y_batch.to(device)) / accumulation_steps # when using torch data parallel 
-            loss = loss.mean()  # Mean the loss from multiple GPUs
-
-            # Accumulate the total accuracy.
-            eval_loss += loss/len(valid_dataLoader)
-            eval_accuracy += tmp_eval_accuracy/len(valid_dataLoader)
-            eval_auc += tmp_eval_auc
+#            tmp_eval_auc = self.compute_auc_score(predicted_labels, label_ids) ## ROC AUC Score
+            
+            # Increment total eval step count
             nb_eval_steps += 1
+        
+        # Normalize to the number of steps
         avg_loss = eval_loss/nb_eval_steps
         avg_accuracy = eval_accuracy/nb_eval_steps
         avg_auc = eval_auc/nb_eval_steps
+        
         tk0.set_postfix(step=global_step,avg_loss=avg_loss,avg_accuracy=avg_accuracy,avg_auc=avg_auc)
         return avg_loss,avg_accuracy,avg_auc
 
@@ -249,13 +271,21 @@ class Bert_Model():
         return np.sum(pred_flat == labels_flat)
 
     def compute_auc_score(self,preds,labels):
-        auc_score = roc_auc_score(labels.flatten(),preds[:,1].flatten())
+        labels = labels.cpu().numpy()
+        preds = preds.cpu().numpy()
+        auc_score = roc_auc_score(labels.flatten(),preds.flatten())
         return auc_score
+    
+    def classifyWithThreshold(self,preds,labels):
+        pass
+        pred_after_sigmoid = torch.sigmoid(preds) # Apply the sigmoid to the logits from output of Bert
+        pred_probs,pred_classes = torch.max(pred_after_sigmoid,dim=-1)
+        return pred_probs,pred_classes
     
     def summaryWriter(self,name,loss,acc,auc,n_iter,logdir):
         # Writer will output to ./runs/ directory by default
         writer = SummaryWriter(logdir)
         writer.add_scalar('Loss/'+name,loss,n_iter)
         writer.add_scalar('Accuracy/'+name,acc,n_iter)
-        writer.add_scalar('ROC AUC Score/'+name,auc,n_iter)
+        writer.add_scalar('ROC_AUC_Score/'+name,auc,n_iter)
         writer.close()
