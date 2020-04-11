@@ -120,6 +120,10 @@ def main():
                         type=int,
                         default=4,
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
+    parser.add_argument('--cross_validation_interval',
+                        type=int,
+                        default=40,
+                        help="Number of training steps to accumulate before performing a cross validation.")
     parser.add_argument('--fp16',
                         action='store_true',
                         help="Whether to use 16-bit float precision instead of 32-bit")
@@ -216,7 +220,7 @@ def main():
 
         max_epochs = args.num_train_epochs
         accumulation_steps = args.gradient_accumulation_steps
-        evaluation_steps = args.gradient_accumulation_steps*4
+        evaluation_steps = args.cross_validation_interval
         train_batch_size = args.train_batch_size
         valid_batch_size = args.eval_batch_size
 

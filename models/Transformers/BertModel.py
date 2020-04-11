@@ -192,6 +192,8 @@ class Bert_Model():
         tr_accuracy = 0.
         tr_auc = 0.
         tr_f1 = 0.
+        tr_precision = 0.
+        tr_recall = 0.
          
         tq = tqdm(range(EPOCHS),total=EPOCHS,leave=False)
         global_step = 0
@@ -227,25 +229,34 @@ class Bert_Model():
                 else:
                     acc = 0
                 tr_accuracy += acc/accumulation_steps
-                # AUC Score
+
+                # AUC Score and classification metrics
                 c_report_dict = self.class_report(predicted_labels,y_batch)
 #                print(self.conf_matrix(predicted_labels,y_batch))
-                f1_score = c_report_dict['1']['f1-score']
-                tr_f1 +=f1_score/accumulation_steps
                 auc = self.compute_auc_score(y_pred[:,1],y_batch)
+                f1_score = c_report_dict['1']['f1-score']
+                precision = c_report_dict['1']['precision']
+                recall = c_report_dict['1']['recall']
+                print(f1_score,precision,recall)
+
+                tr_f1 +=f1_score/accumulation_steps
+                tr_precision +=precision/accumulation_steps
+                tr_recall +=recall/accumulation_steps
                 tr_auc += auc/accumulation_steps
 
-                tk0.set_postfix(step=global_step+1,loss=loss.item(),accuracy=acc) # display running backward loss
+                tk0.set_postfix(step=step+1,forward=(step+1)%accumulation_steps,loss=loss.item(),accuracy=acc) # display running backward loss
 
                 if (step+1) % accumulation_steps == 0:          # Wait for several backward steps
                     # Write training stats to tensorboard
-                    self.summaryWriter("train",tr_loss,tr_accuracy,tr_auc,tr_f1,global_step,logdir)
+                    self.summaryWriter("train",tr_loss,tr_accuracy,tr_auc,tr_f1,tr_precision,tr_recall,global_step,logdir)
  
                     # Zero out the evaluation metrics after several backward steps
                     tr_accuracy = 0
                     tr_loss = 0
                     tr_auc = 0
                     tr_f1 = 0 
+                    tr_precision = 0 
+                    tr_recall = 0 
 
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # clip the norm to 1.0 to prevent exploding gradients
                     optimizer.step()                            # Now we can do an optimizer step
@@ -258,20 +269,27 @@ class Bert_Model():
                                 'train_loss': tr_loss/global_step,
                                 'train_acc': tr_accuracy/global_step,
                                 'train_auc': tr_auc/global_step,
+                                'train_f1': tr_f1/global_step,
+                                'train_precision': tr_precision/global_step,
+                                'train_recall': tr_recall/global_step,
                             })
                     #Run evaluation after several forward passes (determined by evaluation_steps)
                     if (step+1) % evaluation_steps ==0:
                         print("--I-- Running Validation")
-                        eval_loss,eval_accuracy,eval_auc,eval_f1=self.run_eval(model,valid_dataLoader,global_step,criterion)
+                        print(step,evaluation_steps)
+                        eval_loss,eval_accuracy,eval_auc,eval_f1,eval_precision,eval_recall=self.run_eval(model,valid_dataLoader,global_step,criterion)
                         validation_stats.append(
                             {
                                 'step': global_step,
                                 'valid_loss': eval_loss,
                                 'valid accuracy': eval_accuracy,
                                 'valid auc score': eval_auc,
+                                'valid f1 score': eval_f1,
+                                'valid precision score': eval_precision,
+                                'valid recall score': eval_recall,
                             })
                         # Write training stats to tensorboard
-                        self.summaryWriter("eval",eval_loss,eval_accuracy,eval_auc,eval_f1,global_step,logdir)
+                        self.summaryWriter("eval",eval_loss,eval_accuracy,eval_auc,eval_f1,eval_precision,eval_recall,global_step,logdir)
             tq.set_postfix(train_loss=tr_loss,train_accuracy=tr_accuracy,train_auc=tr_auc,leave=False)
         return model,training_stats,validation_stats
     
@@ -281,6 +299,8 @@ class Bert_Model():
         eval_loss = 0.
         eval_auc = 0.
         eval_f1 = 0.
+        eval_precision = 0.
+        eval_recall = 0.
         nb_eval_steps = 0
         tk0 = tqdm(enumerate(valid_dataLoader),total=len(valid_dataLoader),leave=True)
         for step,(x_batch, attn_mask,y_batch,num_excl_batch) in tk0:
@@ -312,8 +332,11 @@ class Bert_Model():
             # F1 Score 
             c_report_dict = self.class_report(predicted_labels,y_batch)
             f1_score = c_report_dict['1']['f1-score']
+            precision = c_report_dict['1']['precision']
+            recall = c_report_dict['1']['recall']
             eval_f1 += f1_score
-
+            eval_precision += precision
+            eval_recall += recall 
 #            tmp_eval_auc = self.compute_auc_score(predicted_labels, label_ids) ## ROC AUC Score
             
             # Increment total eval step count
@@ -324,9 +347,11 @@ class Bert_Model():
         avg_accuracy = eval_accuracy/nb_eval_steps
         avg_auc = eval_auc/nb_eval_steps
         avg_f1 = eval_f1/nb_eval_steps
+        avg_precision = eval_precision/nb_eval_steps
+        avg_recall = eval_recall/nb_eval_steps
         
         tk0.set_postfix(step=global_step,avg_loss=avg_loss,avg_accuracy=avg_accuracy,avg_auc=avg_auc)
-        return avg_loss,avg_accuracy,avg_auc,avg_f1
+        return avg_loss,avg_accuracy,avg_auc,avg_f1,avg_precision,avg_recall
 
     def computeLoss(self,criterion,predicted_probs,y_true):
         loss = criterion(predicted_probs,y_true.type(torch.float).to(device)) # when using torch data parallel
@@ -359,12 +384,14 @@ class Bert_Model():
         pred_probs,pred_classes = torch.max(pred_after_sigmoid,dim=-1)
         return pred_probs,pred_classes
     
-    def summaryWriter(self,name,loss,acc,auc,f1_score,n_iter,logdir):
+    def summaryWriter(self,name,loss,acc,auc,f1_score,precision,recall,n_iter,logdir):
         # Writer will output to ./runs/ directory by default
         writer = SummaryWriter(logdir)
         writer.add_scalar('Loss/'+name,loss,n_iter)
         writer.add_scalar('Accuracy/'+name,acc,n_iter)
         writer.add_scalar('ROC_AUC_Score/'+name,auc,n_iter)
         writer.add_scalar('F1_Score/'+name,f1_score,n_iter)
+        writer.add_scalar('Precision/'+name,f1_score,n_iter)
+        writer.add_scalar('Recall/'+name,f1_score,n_iter)
 
         writer.close()
