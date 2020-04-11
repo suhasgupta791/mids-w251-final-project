@@ -235,7 +235,7 @@ class Bert_Model():
                 auc = self.compute_auc_score(y_pred[:,1],y_batch)
                 tr_auc += auc/accumulation_steps
 
-                tk0.set_postfix(step=global_step+1,loss=loss.item(),accuracy=acc) # display running backward loss
+                tk0.set_postfix(step=step+1,forward=(step+1)%accumulation_steps,loss=loss.item(),accuracy=acc) # display running backward loss
 
                 if (step+1) % accumulation_steps == 0:          # Wait for several backward steps
                     # Write training stats to tensorboard
@@ -262,6 +262,7 @@ class Bert_Model():
                     #Run evaluation after several forward passes (determined by evaluation_steps)
                     if (step+1) % evaluation_steps ==0:
                         print("--I-- Running Validation")
+                        print(step,evaluation_steps)
                         eval_loss,eval_accuracy,eval_auc,eval_f1=self.run_eval(model,valid_dataLoader,global_step,criterion)
                         validation_stats.append(
                             {
