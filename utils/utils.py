@@ -47,8 +47,8 @@ def tokenize(tokenizer,text_array,max_seq_len=64,pad_to_max_length=True,add_spec
     return all_tokens,all_attention_mask
 
 class CreateDataset(Dataset):
-    def __init__(self,data,atten_mask,labels):
-        self._dataset = [[data[i],atten_mask[i],labels.values[i]] for i in range(0,len(data))]
+    def __init__(self,data,atten_mask,labels,num_excl):
+        self._dataset = [[data[i],atten_mask[i],labels.values[i],num_excl.values[i]] for i in range(0,len(data))]
     
     def __len__(self):
         return len(self._dataset)
@@ -61,9 +61,11 @@ def createTestTrainSplit(all_train_df,test_size=0.2,seed=1234):
     train_df, valid_df = train_test_split(all_train_df, test_size=0.2,random_state=seed)
     train_data   = train_df.text.fillna("DUMMY_VALUE")
     train_labels = train_df.label
+    train_num_excl = train_df.num_exclamation_marks
     valid_data  = valid_df.text.fillna("DUMMY_VALUE")
     valid_labels = valid_df.label
-    return train_data,train_labels,valid_data,valid_labels
+    valid_num_excl = train_df.num_exclamation_marks
+    return train_data,train_labels,train_num_excl,valid_data,valid_labels,valid_num_excl
 
 def saveTokensToFiles(TOKEN_DATA_PATH,
                     train_data_tokenized,train_attention_mask,
@@ -102,7 +104,6 @@ def loadTokensFromFiles(TOKEN_DATA_PATH,
          test_attention_mask=pickle.load(fp)
 
 def generateDataLoader(dataset,batch_size,shuffle=False,num_workers=16,pin_memory=False,drop_last=True):
-
     # print("Expected number of batches:", int(len(train_data_tokenized)/params['batch_size']))
     sampler = RandomSampler(dataset)
     dataLoader = torch.utils.data.DataLoader(dataset=dataset,

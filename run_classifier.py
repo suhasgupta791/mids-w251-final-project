@@ -174,9 +174,6 @@ def main():
     # Initialize the tokenizer
     tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
 
-    train_examples = None
-    num_train_steps = None
-
     # Convert TF checkpoint to pytorch checkpoint and then use as input to class object
     if args.bert_model_path:
         bert_model_path = args.bert_model_path
@@ -192,11 +189,10 @@ def main():
             raise ValueError("Training file name must be specified if --do_train is set")
         train_file_path = args.data_dir+"/"+args.train_file
         all_train_df = pd.read_csv(train_file_path)
-
         #test_df = pd.read_csv(test_file_name)
 
         # Create a train, valid split
-        train_data,train_labels,valid_data,valid_labels = createTestTrainSplit(all_train_df, test_size=0.2,seed=seed)
+        train_data,train_labels,train_num_excl,valid_data,valid_labels,valid_num_excl = createTestTrainSplit(all_train_df, test_size=0.2,seed=seed)
 
         train_size,valid_size= len(train_data),len(valid_data)
         print(train_size,valid_size)
@@ -209,14 +205,14 @@ def main():
                           max_seq_length=max_seq_len)
 
         print("--Tokenizing--")
-        train_data_tokenized,train_attention_mask = tokenize(tokenizer,train_data)
-        valid_data_tokenized,valid_attention_mask = tokenize(tokenizer,valid_data)
+        train_data_tokenized,train_attention_mask = tokenize(tokenizer,train_data,max_seq_len)
+        valid_data_tokenized,valid_attention_mask = tokenize(tokenizer,valid_data,max_seq_len)
 
-        #test_data_tokenized,test_attention_mask   = tokenize(tokenizer,test_data)
+        #test_data_tokenized,test_attention_mask   = tokenize(tokenizer,test_data,max_seq_len)
     
         # Create data set for training
-        train_dataset = CreateDataset(train_data_tokenized,train_attention_mask,train_labels)
-        valid_dataset = CreateDataset(valid_data_tokenized,valid_attention_mask,valid_labels)
+        train_dataset = CreateDataset(train_data_tokenized,train_attention_mask,train_labels,train_num_excl)
+        valid_dataset = CreateDataset(valid_data_tokenized,valid_attention_mask,valid_labels,valid_num_excl)
 
         max_epochs = args.num_train_epochs
         accumulation_steps = args.gradient_accumulation_steps

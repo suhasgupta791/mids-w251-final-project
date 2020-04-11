@@ -33,10 +33,6 @@ from transformers import AdamW,get_linear_schedule_with_warmup, pipeline
 # Import package for data parallelism to train on multi-GPU machines
 from models.Transformers.parallel import DataParallelModel, DataParallelCriterion
 
-# Import custom models
-from models.Transformers.CNNModel2 import CNN
-from models.Transformers.models import BertFC, BertSeq,BertFCWithExclamation, BertSeq,BertFCWithExclamation2
-from models.Transformers.BertCustom import BertCustom
 
 # Check if cuda is available
 # Set the device and empty cache
@@ -105,60 +101,11 @@ class Bert_Model():
 
         # Empty cache
         torch.cuda.empty_cache()
-        
-        ## Construct Bert model with pre trained weights
-
-        # Bert Only Model
-#        model = BertForSequenceClassification.from_pretrained(self._bert_model_path,
-#                                                              cache_dir=None,
-#                                                              num_labels=768,
-#                                                              output_attentions = False,
-#                                                              output_hidden_states = False)
-                                                              
-        ## Bert + CNN Model 
-        #embed_num = self._MAX_SEQUENCE_LENGTH
-        embed_dim = 768
-        class_num = 2
-        #kernel_num = 3
-        #kernel_sizes = [10,15,20]
-        dropout = 0.3
-        #static = True
-
-        #model = CNN(batch_size,self._bert_model_path,
-                    #embed_num=embed_num,
-                    #embed_dim=embed_dim,
-                    #class_num=class_num,
-                    #kernel_num=kernel_num,
-                    #kernel_sizes=kernel_sizes,
-                    #dropout=dropout,
-                    #static=static,
-                    #)
-
-        #model = BertFC(batch_size,self._bert_model_path,
-                    #embed_dim=embed_dim,
-                    #class_num=class_num,
-                    #dropout=dropout
-                    #)
-
-        #model = BertSeq(batch_size,self._bert_model_path,
-                    #embed_dim=embed_dim,
-                    #class_num=class_num,
-                    #dropout=dropout
-                    #)
-        
-        model = BertFCWithExclamation(self._bert_model_path,
-                    embed_dim=embed_dim,
-                    class_num=class_num,
-                    dropout=dropout
-                    )
-        model = BertFCWithExclamation2(self._bert_model_path,
-                    embed_dim=embed_dim,
-                    class_num=class_num,
-                    dropout=dropout
-                    )
-
-
-        
+        model = BertForSequenceClassification.from_pretrained(self._bert_model_path,
+                                                              cache_dir=None,
+                                                              num_labels=2,
+                                                              output_attentions = False, 
+                                                              output_hidden_states = False)
         model = model.to(device)
         param_optimizer = list(model.named_parameters())
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
@@ -198,20 +145,23 @@ class Bert_Model():
         for epoch in tq:
             print("--Training--")
             tk0 = tqdm(enumerate(train_dataLoader),total=len(train_dataLoader),leave=True)
-            for step,(x_batch,attn_mask,y_batch,num_excl_batch) in tk0:
-                #num_excl_batch = torch.tensor(num_excl_batch,dtype=torch.float)
-                num_excl_batch = num_excl_batch.type(torch.float)
-                outputs = model(x_batch.to(device),num_excl_batch.to(device),
+            for step,(x_batch,attn_mask,y_batch) in tk0:
+                outputs = model(x_batch.to(device),
                                 token_type_ids=None, 
                                 attention_mask=attn_mask.to(device), 
                                 labels=y_batch.to(device))
-                y_pred = outputs
+                lossf,y_pred = outputs
                 predicted_probs,predicted_labels = self.classifyWithThreshold(y_pred,y_batch)
 
+		# Apply the additional layers
+		
+                
                 # Parallel GPU processing
+                #parallel_loss_criterion = DataParallelCriterion(criterion)
 
                 # Loss
-                loss = self.computeLoss(criterion,predicted_probs,y_batch)  
+                loss = criterion(predicted_probs,torch.tensor(y_batch, dtype=torch.float, device=device)) # when using torch data parallel
+                loss = loss.mean()  # Mean the loss from multiple GPUs and take care of the batch
                 #loss = parallel_loss_criterion(y_pred,y_batch.to(device))/accumulation_steps # when using balanced data parallel script
 
                 if device == 'cuda':
@@ -222,10 +172,7 @@ class Bert_Model():
                 tr_loss += loss.item()/accumulation_steps  # accumulate the global loss (divide by gloabal step to reflect moving average)
                 
                 # Accuracy
-                if step>0:
-                    acc = torch.mean((predicted_labels == y_batch.to(device)).to(torch.float)).item()  # accuracy for the whole batch
-                else:
-                    acc = 0
+                acc = torch.mean((predicted_labels == y_batch.to(device)).to(torch.float)).item()  # accuracy for the whole batch
                 tr_accuracy += acc/accumulation_steps
                 # AUC Score
                 c_report_dict = self.class_report(predicted_labels,y_batch)
@@ -234,6 +181,8 @@ class Bert_Model():
                 tr_f1 +=f1_score/accumulation_steps
                 auc = self.compute_auc_score(y_pred[:,1],y_batch)
                 tr_auc += auc/accumulation_steps
+
+                tk0.set_postfix(step=global_step+1,loss=loss.item(),accuracy=acc) # display running backward loss
 
                 tk0.set_postfix(step=global_step+1,loss=loss.item(),accuracy=acc) # display running backward loss
 
@@ -283,22 +232,19 @@ class Bert_Model():
         eval_f1 = 0.
         nb_eval_steps = 0
         tk0 = tqdm(enumerate(valid_dataLoader),total=len(valid_dataLoader),leave=True)
-        for step,(x_batch, attn_mask,y_batch,num_excl_batch) in tk0:
+        for step,(x_batch, attn_mask,y_batch) in tk0:
             model.eval()
             with torch.no_grad():
-                #num_excl_batch = torch.tensor(num_excl_batch,dtype=torch.float)
-                num_excl_batch = num_excl_batch.type(torch.float)
-                outputs = model(x_batch.to(device),num_excl_batch.to(device), 
+                outputs = model(x_batch.to(device), 
                                 token_type_ids=None, 
                                 attention_mask=attn_mask.to(device), 
                                 labels=y_batch.to(device))
-            #loss, y_pred = outputs
-            y_pred = outputs
-
+            loss, y_pred = outputs
             predicted_probs,predicted_labels = self.classifyWithThreshold(y_pred,y_batch)
 
             # Loss
-            loss = self.computeLoss(criterion,predicted_probs,y_batch)  
+            loss = criterion(predicted_probs,torch.tensor(y_batch, dtype=torch.float, device=device)) # when using torch data parallel
+            loss = loss.mean()  # Mean the loss from multiple GPUs and to take care of batch size
             eval_loss += loss.item()
             
             # Accuracy
@@ -327,11 +273,6 @@ class Bert_Model():
         
         tk0.set_postfix(step=global_step,avg_loss=avg_loss,avg_accuracy=avg_accuracy,avg_auc=avg_auc)
         return avg_loss,avg_accuracy,avg_auc,avg_f1
-
-    def computeLoss(self,criterion,predicted_probs,y_true):
-        loss = criterion(predicted_probs,y_true.type(torch.float).to(device)) # when using torch data parallel
-        loss = loss.mean()  # Mean the loss from multiple GPUs and to take care of batch size
-        return loss
 
      # Function to calculate the accuracy of predictions vs labels
     def flat_accuracy(self,preds,labels):
@@ -366,5 +307,4 @@ class Bert_Model():
         writer.add_scalar('Accuracy/'+name,acc,n_iter)
         writer.add_scalar('ROC_AUC_Score/'+name,auc,n_iter)
         writer.add_scalar('F1_Score/'+name,f1_score,n_iter)
-
         writer.close()
