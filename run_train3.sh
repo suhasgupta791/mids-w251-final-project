@@ -9,11 +9,11 @@ python run_classifier.py \
 		 --output_dir $OUTPUT_DIR \
                  --max_seq_length 128 \
                  --do_train \
-		 --train_file "comment_exclamation.csv" \
+		 --train_file "small_train.csv" \
                  --train_batch_size 32 \
                  --eval_batch_size 32 \
-                 --num_train_epochs 1 \
-                 --gradient_accumulation_steps=6 \
+                 --num_train_epochs 10 \
+                 --gradient_accumulation_steps=10 \
 		 --learning_rate 2e-5 \
                  --fp16
 
