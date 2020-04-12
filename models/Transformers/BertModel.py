@@ -16,6 +16,7 @@ from torch.utils.tensorboard import SummaryWriter
 import torchvision
 import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix
+from sklearn.metrics import precision_recall_fscore_support
 from tqdm import tqdm, tqdm_notebook
 import warnings
 warnings.filterwarnings(action='once')
@@ -96,7 +97,7 @@ class Bert_Model():
         return all_tokens,all_attention_mask
      
     def initialize_model_for_training(self,dataset_len,EPOCHS=1,model_seed=21000,lr=2e-5,batch_size=32,
-                                      accumulation_steps=2):
+                                      accumulation_steps=2,num_warmup_steps=15):
         # Setup model parameters
         np.random.seed(model_seed)
         torch.manual_seed(model_seed)
@@ -121,7 +122,7 @@ class Bert_Model():
         class_num = 2
         #kernel_num = 3
         #kernel_sizes = [10,15,20]
-        dropout = 0.3
+        dropout = 0.5
         #static = True
 
         #model = CNN(batch_size,self._bert_model_path,
@@ -146,19 +147,17 @@ class Bert_Model():
                     #dropout=dropout
                     #)
         
-        model = BertFCWithExclamation(self._bert_model_path,
-                    embed_dim=embed_dim,
-                    class_num=class_num,
-                    dropout=dropout
-                    )
+        #model = BertFCWithExclamation(self._bert_model_path,
+                    #embed_dim=embed_dim,
+                    #class_num=class_num,
+                    #dropout=dropout
+                    #)
         model = BertFCWithExclamation2(self._bert_model_path,
                     embed_dim=embed_dim,
                     class_num=class_num,
                     dropout=dropout
                     )
 
-
-        
         model = model.to(device)
         param_optimizer = list(model.named_parameters())
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
@@ -168,22 +167,23 @@ class Bert_Model():
             ]
         num_train_optimization_steps = int(EPOCHS*dataset_len/batch_size/accumulation_steps)
         optimizer = AdamW(optimizer_grouped_parameters, lr=lr,eps=1e-8,correct_bias=False)  # To reproduce BertAdam specific behavior set correct_bias=False
-        scheduler = get_linear_schedule_with_warmup(optimizer,num_warmup_steps=10,num_training_steps=num_train_optimization_steps)  # PyTorch scheduler
+        scheduler = get_linear_schedule_with_warmup(optimizer,num_warmup_steps=num_warmup_steps,num_training_steps=num_train_optimization_steps)  # PyTorch scheduler
         if device == 'cuda' :
             model, optimizer = amp.initialize(model,optimizer,opt_level="O1",verbosity=0)
         ### Parallel GPU processing
         #model = DataParallelModel(model) # using balanced data parallalism script
         model = torch.nn.DataParallel(model) # using native pytorch 	
-#        criterion = nn.CrossEntropyLoss()
-        criterion = nn.BCELoss()
+        #criterion = nn.CrossEntropyLoss()
+        #criterion = nn.BCELoss()
+        criterion = nn.MSELoss()
         model = model.train()
         model.zero_grad()
         optimizer.zero_grad()
         return model,optimizer,scheduler,criterion,EPOCHS
     
-    def run_training(self,model,train_dataLoader,valid_dataLoader,optimizer,scheduler,criterion,
-                     EPOCHS=1,tr_batch_size=32,accumulation_steps=20,evaluation_steps=80,pred_thres=0.5,
-                     logdir='./logs'):
+    def run_training(self,model,train_dataLoader,valid_dataLoader,optimizer,scheduler,criterion,output_path,checkpoint_path=None,
+                     EPOCHS=1,tr_batch_size=32,accumulation_steps=20,evaluation_steps=80,checkpoint_interval=10,pred_thres=0.5,
+                     logdir='./logs',saveCheckpointsBool=True,resumeTraining=False):
         # Data Structure for training statistics
         training_stats=[]
         validation_stats=[]
@@ -194,10 +194,24 @@ class Bert_Model():
         tr_f1 = 0.
         tr_precision = 0.
         tr_recall = 0.
+        eval_loss = 0.
+        eval_accuracy = 0.
+        eval_auc=0.
+        eval_f1=0.
+        eval_precision=0.
+        eval_recall=0.
+        best_accuracy = 0.
          
         tq = tqdm(range(EPOCHS),total=EPOCHS,leave=False)
         global_step = 0
         for epoch in tq:
+            
+            # Resume from checkpoint if required
+            if epoch==0 and resumeTraining:
+                model, optimizer,epoch,loss,tr_loss,tr_accuracy,
+                tr_f1,tr_precision,tr_recall,eval_loss,eval_accuracy,
+                eval_auc,eval_f1,eval_precision,eval_recall,global_step=loadFromCheckpoint(model,optimizer,checkpoint_path) 
+        
             print("--Training--")
             tk0 = tqdm(enumerate(train_dataLoader),total=len(train_dataLoader),leave=True)
             for step,(x_batch,attn_mask,y_batch,num_excl_batch) in tk0:
@@ -234,11 +248,11 @@ class Bert_Model():
                 c_report_dict = self.class_report(predicted_labels,y_batch)
 #                print(self.conf_matrix(predicted_labels,y_batch))
                 auc = self.compute_auc_score(y_pred[:,1],y_batch)
-                f1_score = c_report_dict['1']['f1-score']
-                precision = c_report_dict['1']['precision']
-                recall = c_report_dict['1']['recall']
-                print(f1_score,precision,recall)
-
+                #f1_score = c_report_dict['1']['f1-score']
+                #precision = c_report_dict['1']['precision']
+                #recall = c_report_dict['1']['recall']
+                precision,recall,f1_score,support = self.precision_recall_f1(predicted_labels,y_batch)
+                #print(precision,recall,f1_score)
                 tr_f1 +=f1_score/accumulation_steps
                 tr_precision +=precision/accumulation_steps
                 tr_recall +=recall/accumulation_steps
@@ -276,7 +290,6 @@ class Bert_Model():
                     #Run evaluation after several forward passes (determined by evaluation_steps)
                     if (step+1) % evaluation_steps ==0:
                         print("--I-- Running Validation")
-                        print(step,evaluation_steps)
                         eval_loss,eval_accuracy,eval_auc,eval_f1,eval_precision,eval_recall=self.run_eval(model,valid_dataLoader,global_step,criterion)
                         validation_stats.append(
                             {
@@ -290,7 +303,18 @@ class Bert_Model():
                             })
                         # Write training stats to tensorboard
                         self.summaryWriter("eval",eval_loss,eval_accuracy,eval_auc,eval_f1,eval_precision,eval_recall,global_step,logdir)
+
+                # Save the checkpoint at specified intervals
+                if saveCheckpointsBool and (step+1) % checkpoint_interval == 0:
+                    print("--Saving Checkpoint--")
+                    torch.save(model, output_path+"/model_checkpoint.bin")
+                    # Record the best model checkpoint 
+                    if eval_accuracy > best_accuracy*1.02: # change best model only if its better than 2% from the previous one
+                        torch.save(model, output_path+"/best_model_checkpoint.bin")
+                        best_f1 = eval_f1
+
             tq.set_postfix(train_loss=tr_loss,train_accuracy=tr_accuracy,train_auc=tr_auc,leave=False)
+
         return model,training_stats,validation_stats
     
     def run_eval(self,model,valid_dataLoader,global_step,criterion):
@@ -330,10 +354,11 @@ class Bert_Model():
             eval_auc += auc
 
             # F1 Score 
-            c_report_dict = self.class_report(predicted_labels,y_batch)
-            f1_score = c_report_dict['1']['f1-score']
-            precision = c_report_dict['1']['precision']
-            recall = c_report_dict['1']['recall']
+            #c_report_dict = self.class_report(predicted_labels,y_batch)
+            #f1_score = c_report_dict['1']['f1-score']
+            #precision = c_report_dict['1']['precision']
+            #recall = c_report_dict['1']['recall']
+            precision,recall,f1_score,support = self.precision_recall_f1(predicted_labels,y_batch)
             eval_f1 += f1_score
             eval_precision += precision
             eval_recall += recall 
@@ -374,6 +399,10 @@ class Bert_Model():
         c_report = classification_report(labels.flatten(),preds.detach().cpu().numpy().flatten(),output_dict=True,zero_division=0)
         return c_report
     
+    def precision_recall_f1(self,preds,labels,average="macro"):
+        precision,recall,f1,support = precision_recall_fscore_support(labels.flatten(),preds.detach().cpu().numpy().flatten(),average=average)
+        return precision,recall,f1,support
+
     def conf_matrix(self,preds,labels):
         conf_matrix = confusion_matrix(labels.flatten(),preds.detach().cpu().numpy().flatten())
         return conf_matrix
@@ -391,7 +420,30 @@ class Bert_Model():
         writer.add_scalar('Accuracy/'+name,acc,n_iter)
         writer.add_scalar('ROC_AUC_Score/'+name,auc,n_iter)
         writer.add_scalar('F1_Score/'+name,f1_score,n_iter)
-        writer.add_scalar('Precision/'+name,f1_score,n_iter)
-        writer.add_scalar('Recall/'+name,f1_score,n_iter)
-
+        writer.add_scalar('Precision/'+name,precision,n_iter)
+        writer.add_scalar('Recall/'+name,recall,n_iter)
         writer.close()
+
+    def loadFromCheckpoint(self,model_object,optimizer_object,checkpoint_path):
+        model = model_object
+        optimizer = optimizer_object 
+        checkpoint = torch.load(checkpoint_path)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        return (
+            model,
+            optimizer,
+            checkpoint['epoch'],
+            checkpoint['loss'],
+            checkpoint['tr_loss'],
+            checkopint['tr_accuracy'],
+            checkopint['tr_f1'],
+            checkopint['tr_precision'],
+            checkopint['tr_recall'],
+            checkopint['eval_loss'],
+            checkopint['eval_accuracy'],
+            checkopint['eval_auc'],
+            checkopint['eval_f1'],
+            checkopint['eval_precision'],
+            checkopint['eval_recall'],
+            checkopint['global_step'])

@@ -100,10 +100,10 @@ def main():
                         default=3,
                         type=int,
                         help="Total number of training epochs to perform.")
-    parser.add_argument("--warmup_proportion",
-                        default=0.1,
+    parser.add_argument("--num_warmup_steps",
+                        default=15,
                         type=float,
-                        help="Proportion of training to perform linear learning rate warmup for. "
+                        help="Number of steps to perform linear learning rate warmup for"
                              "E.g., 0.1 = 10%% of training.")
     parser.add_argument("--no_cuda",
                         action='store_true',
@@ -124,6 +124,10 @@ def main():
                         type=int,
                         default=40,
                         help="Number of training steps to accumulate before performing a cross validation.")
+    parser.add_argument('--checkpoint_interval',
+                        type=int,
+                        default=40,
+                        help="Number of steps before saving model checkpoint.")
     parser.add_argument('--fp16',
                         action='store_true',
                         help="Whether to use 16-bit float precision instead of 32-bit")
@@ -246,13 +250,15 @@ def main():
         # Initialize the model
         model,optimizer,scheduler,criterion,EPOCHS = bert_model1.initialize_model_for_training(len(train_dataLoader),
                                                             EPOCHS=max_epochs,
-                                                            accumulation_steps=accumulation_steps,lr=learning_rate)
+                                                            accumulation_steps=accumulation_steps,lr=learning_rate,num_warmup_steps=args.num_warmup_steps)
         # Train the model
         trained_model,training_stats,validation_stats=bert_model1.run_training(model,train_dataLoader,valid_dataLoader,
                                                         optimizer=optimizer,scheduler=scheduler,criterion=criterion,
+                                                        output_path=args.output_dir,
                                                         pred_thres=PREDICTION_THRESHOLD,EPOCHS=EPOCHS,
                                                         accumulation_steps=accumulation_steps,evaluation_steps=evaluation_steps,
-                                                        logdir=logdir)
+                                                        checkpoint_interval=args.checkpoint_interval,
+                                                        logdir=logdir,)
         print("Training Time:%0.5f seconds" %(time.time()-start))
         
         # Save the model
