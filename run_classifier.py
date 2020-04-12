@@ -32,6 +32,10 @@ from transformers import BertTokenizer, BertModel, BertConfig
 from transformers import  BertForSequenceClassification, BertForTokenClassification
 from transformers import AdamW,get_linear_schedule_with_warmup, pipeline
 
+# Import custom model classes
+from models.Transformers.models import *
+
+
 # Import Models
 from models.Transformers.BertModel import *
 
@@ -67,7 +71,18 @@ def main():
                         type=str,
                         required=False,
                         help="The input training file name. Must be provided if --do_train is set.")
-    
+   
+    parser.add_argument("--trained_model_path",
+                        default=None,
+                        type=str,
+                        required=False,
+                        help="full path to trained model when running predictions or resuming training.")
+                        
+    parser.add_argument("--test_file",
+                        default=None,
+                        type=str,
+                        required=False,
+                        help="The input test file name. Must be provided if --do_eval is set.")
     ## Other parameters
     parser.add_argument("--max_seq_length",
                         default=128,
@@ -80,7 +95,7 @@ def main():
                         help="Whether to run training.")
     parser.add_argument("--do_eval",
                         action='store_true',
-                        help="Whether to run eval on the dev set.")
+                        help="Whether to run model in predict mode.")
     parser.add_argument("--do_lower_case",
                         action='store_true',
                         help="Set this flag if you are using an uncased model.")
@@ -100,10 +115,10 @@ def main():
                         default=3,
                         type=int,
                         help="Total number of training epochs to perform.")
-    parser.add_argument("--warmup_proportion",
-                        default=0.1,
+    parser.add_argument("--num_warmup_steps",
+                        default=15,
                         type=float,
-                        help="Proportion of training to perform linear learning rate warmup for. "
+                        help="Number of steps to perform linear learning rate warmup for"
                              "E.g., 0.1 = 10%% of training.")
     parser.add_argument("--no_cuda",
                         action='store_true',
@@ -124,6 +139,10 @@ def main():
                         type=int,
                         default=40,
                         help="Number of training steps to accumulate before performing a cross validation.")
+    parser.add_argument('--checkpoint_interval',
+                        type=int,
+                        default=40,
+                        help="Number of steps before saving model checkpoint.")
     parser.add_argument('--fp16',
                         action='store_true',
                         help="Whether to use 16-bit float precision instead of 32-bit")
@@ -185,10 +204,6 @@ def main():
     # Load data
     data_path = args.data_dir
     if args.do_train:
-        #train_file_name = data_path+'small_train.csv'
-        #test_file_name  = data_path+'small_test.csv'
-        #train_file_name = data_path+'balanced_train.csv'
-        # test_file_name  = data_path+'balanced_test.csv'
         if not args.train_file:
             raise ValueError("Training file name must be specified if --do_train is set")
         train_file_path = args.data_dir+"/"+args.train_file
@@ -233,9 +248,6 @@ def main():
         print("Number of validation steps:",len(train_dataLoader)*max_epochs/evaluation_steps)
 
         #### Model Initialization and Training
-
-        # Set the prediction threshold for classifying sarcasm
-        PREDICTION_THRESHOLD=0.8
         start = time.time()
 
         if args.learning_rate:
@@ -246,12 +258,14 @@ def main():
         # Initialize the model
         model,optimizer,scheduler,criterion,EPOCHS = bert_model1.initialize_model_for_training(len(train_dataLoader),
                                                             EPOCHS=max_epochs,
-                                                            accumulation_steps=accumulation_steps,lr=learning_rate)
+                                                            accumulation_steps=accumulation_steps,lr=learning_rate,num_warmup_steps=args.num_warmup_steps)
         # Train the model
         trained_model,training_stats,validation_stats=bert_model1.run_training(model,train_dataLoader,valid_dataLoader,
                                                         optimizer=optimizer,scheduler=scheduler,criterion=criterion,
+                                                        output_path=args.output_dir,
                                                         pred_thres=PREDICTION_THRESHOLD,EPOCHS=EPOCHS,
                                                         accumulation_steps=accumulation_steps,evaluation_steps=evaluation_steps,
+                                                        checkpoint_interval=args.checkpoint_interval,
                                                         logdir=logdir)
         print("Training Time:%0.5f seconds" %(time.time()-start))
         
@@ -267,7 +281,44 @@ def main():
         model = torch.load(args.output_dir+"/trained_model.pt")
         model.eval()
         print(model)
+    print(args.test_file)
+    if args.do_eval:
+        if not args.trained_model_path:
+            raise ValueError("Trained model path must be provided when running predictions")
+        if not args.test_file:
+            raise ValueError("Test file name must be provided when running predictions")
+               
+        test_df = pd.read_csv(args.data_dir+"/"+args.test_file)
+        test_data,test_labels,test_num_excl,_,_,_ = createTestTrainSplit(test_df, test_size=0,seed=seed)
+        print(len(test_data))
+        print("--Tokenizing--")
+        test_data_tokenized,test_attention_mask = tokenize(tokenizer,test_data,max_seq_len)
+        
+        # Create a model object
+        bert_model1=Bert_Model(train_df=test_data,
+                          bert_model_name=bert_model_name,
+                          bert_model_path=bert_model_path,
+                          tokenizer=tokenizer,
+                          max_seq_length=max_seq_len)
 
+        # Create the dataset object
+        test_dataset = CreateDataset(test_data_tokenized,test_attention_mask,test_labels,test_num_excl)
+        #Create the data loader object
+        test_dataLoader = generateDataLoader(test_dataset,args.eval_batch_size)
+        print("Generated number of test batches:%d" %len(test_dataLoader))
+        
+        
+        # Initialize the model
+        model,optimizer,scheduler,criterion,EPOCHS = bert_model1.initialize_model(len(test_dataLoader),
+                                                                loadfromCheckpoint=False,evalMode=True,model_checkpoint=args.trained_model_path)
+        
+        # Run predictions
+        
+        prediction_set,avg_accuracy,avg_f1,avg_precision,avg_recall=bert_model1.run_predict(model,test_dataLoader,args.eval_batch_size,global_step=1,criterion=criterion)
+        #print(predictions)
+        print("Accuracy:%0.5f | F1 Score:%0.5f | Precision:%0.5f | Recall: %0.5f" %(avg_accuracy,avg_f1,avg_precision,avg_recall))
+        np.savetxt(args.output_dir+"/"+"predicted_labels",prediction_set,delimiter=',')
+        
         
 if __name__ == "__main__":
     main()

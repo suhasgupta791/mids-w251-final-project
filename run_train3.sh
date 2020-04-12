@@ -1,6 +1,7 @@
 #!/bin/bash -f 
 
-OUTPUT_DIR="/data_root/outputs/local_gpu_balanced_BertFCWithExcl2_maxseq-128_lr_2em5_1epoch/"
+OUTPUT_DIR="/data_root/outputs/localgpu_fulldata_fixed_metrics_BertFCWithExcl3_maxseq-128_lr_2em6_warmup-05_metric-acc_1epoch/"
+#OUTPUT_DIR="/data_root/outputs/test"
 
 python run_classifier.py \
 		 --data_dir "/data_root/nlp.cs.princeton.edu/SARC/2.0/files/" \
@@ -9,12 +10,16 @@ python run_classifier.py \
 		 --output_dir $OUTPUT_DIR \
                  --max_seq_length 128 \
                  --do_train \
-		 --train_file "small_train.csv" \
+		 --train_file "comment_exclamation.csv" \
                  --train_batch_size 32 \
                  --eval_batch_size 32 \
-                 --num_train_epochs 10 \
-                 --gradient_accumulation_steps=10 \
-		 --learning_rate 2e-5 \
+                 --num_train_epochs 1 \
+                 --gradient_accumulation_steps=20 \
+		 --cross_validation_interval=30 \
+		 --checkpoint_interval=30 \
+		 --learning_rate 2e-6 \
+		 --num_warmup_steps 10 \
                  --fp16
 
 cp run_classifier.py $OUTPUT_DIR
+cp run_train3.sh $OUTPUT_DIR
