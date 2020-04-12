@@ -123,7 +123,7 @@ class Bert_Model():
         class_num = 2
         #kernel_num = 3
         #kernel_sizes = [10,15,20]
-        dropout = 0.3
+        dropout = 0.5
         #static = True
 
         #model = CNN(batch_size,self._bert_model_path,
@@ -180,7 +180,7 @@ class Bert_Model():
             ### Parallel GPU processing
             model = torch.nn.DataParallel(model) # using native pytorch
     #        criterion = nn.CrossEntropyLoss()
-            criterion = nn.BCELoss()
+            criterion = nn.MSELoss()
             model = model.train()
             model.zero_grad()
             optimizer.zero_grad()
@@ -198,6 +198,17 @@ class Bert_Model():
                 model = model.train()
                 model.zero_grad()
                 optimizer.zero_grad()
+        if device == 'cuda' :
+            model, optimizer = amp.initialize(model,optimizer,opt_level="O1",verbosity=0)
+        ### Parallel GPU processing
+        #model = DataParallelModel(model) # using balanced data parallalism script
+        model = torch.nn.DataParallel(model) # using native pytorch 	
+        #criterion = nn.CrossEntropyLoss()
+        #criterion = nn.BCELoss()
+        criterion = nn.MSELoss()
+        model = model.train()
+        model.zero_grad()
+        optimizer.zero_grad()
         return model,optimizer,scheduler,criterion,EPOCHS
     
     def run_training(self,model,train_dataLoader,valid_dataLoader,optimizer,scheduler,criterion,output_path,checkpoint_path=None,
@@ -270,7 +281,7 @@ class Bert_Model():
                 #f1_score = c_report_dict['1']['f1-score']
                 #precision = c_report_dict['1']['precision']
                 #recall = c_report_dict['1']['recall']
-                precision,recall,f1_score,support = self.precision_recall_f1(predicted_labels,y_batch,average="micro")
+                precision,recall,f1_score,support = self.precision_recall_f1(predicted_labels,y_batch)
                 #print(precision,recall,f1_score)
                 tr_f1 +=f1_score/accumulation_steps
                 tr_precision +=precision/accumulation_steps
@@ -326,43 +337,11 @@ class Bert_Model():
                 # Save the checkpoint at specified intervals
                 if saveCheckpointsBool and (step+1) % checkpoint_interval == 0:
                     print("--Saving Checkpoint--")
-                    torch.save({
-                        'epoch': epoch,
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'tr_loss': tr_loss,
-                        'tr_Accuracy':tr_accuracy,
-                        'tr_f1': tr_f1,
-                        'tr_precision': tr_precision,
-                        'tr_recall': tr_recall,
-                        'eval_loss': eval_loss,
-                        'eval_accuracy': eval_accuracy,
-                        'eval_auc': eval_auc,
-                        'eval_f1': eval_f1,
-                        'eval_precision': eval_precision,
-                        'eval_recall': eval_recall,
-                        'global_step': global_step,
-                        }, output_path+"/model_checkpoint.pt")
+                    torch.save(model, output_path+"/model_checkpoint.bin")
                     # Record the best model checkpoint 
                     if eval_accuracy > best_accuracy*1.02: # change best model only if its better than 2% from the previous one
+                        torch.save(model, output_path+"/best_model_checkpoint.bin")
                         best_f1 = eval_f1
-                        torch.save({
-                        'epoch': epoch,
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'tr_loss': tr_loss,
-                        'tr_Accuracy':tr_accuracy,
-                        'tr_f1': tr_f1,
-                        'tr_precision': tr_precision,
-                        'tr_recall': tr_recall,
-                        'eval_loss': eval_loss,
-                        'eval_accuracy': eval_accuracy,
-                        'eval_auc': eval_auc,
-                        'eval_f1': eval_f1,
-                        'eval_precision': eval_precision,
-                        'eval_recall': eval_recall,
-                        'global_step': global_step,
-                        }, output_path+"/best_model.pt")
 
             tq.set_postfix(train_loss=tr_loss,train_accuracy=tr_accuracy,train_auc=tr_auc,leave=False)
 
@@ -405,11 +384,11 @@ class Bert_Model():
             eval_auc += auc
 
             # F1 Score 
-            c_report_dict = self.class_report(predicted_labels,y_batch)
-            precision,recall,f1_score,support = self.precision_recall_f1(predicted_labels,y_batch,average="micro")
+            #c_report_dict = self.class_report(predicted_labels,y_batch)
             #f1_score = c_report_dict['1']['f1-score']
             #precision = c_report_dict['1']['precision']
             #recall = c_report_dict['1']['recall']
+            precision,recall,f1_score,support = self.precision_recall_f1(predicted_labels,y_batch)
             eval_f1 += f1_score
             eval_precision += precision
             eval_recall += recall 
