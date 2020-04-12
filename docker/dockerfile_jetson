@@ -63,12 +63,12 @@ RUN pip3 install tokenizers-0.5.2-cp36-cp36m-linux_aarch64.whl
 
 # Transfomers from source 
 WORKDIR /tmp
-RUN git clone https://github.com/huggingface/transformers
-WORKDIR transformers
-COPY pytorch-transformers/setup.py .
-RUN pip3 install .
-#COPY transformers-2.7.0-py3-none-any.whl .
-#RUN pip3 install transformers-2.7.0-py3-none-any.whl
+#RUN git clone https://github.com/huggingface/transformers
+#WORKDIR transformers
+#COPY pytorch-transformers/setup.py .
+#RUN pip3 install .
+COPY transformers-2.7.0-py3-none-any.whl .
+RUN pip3 install transformers-2.7.0-py3-none-any.whl
 #ENV PYTHONPATH "${PYTHONPATH}:/usr/lib/python3/dist-packages/"
 
 WORKDIR /root
