@@ -10,6 +10,7 @@ import random
 import numpy as np
 import os
 import torch
+import tqdm
 
 import torch.nn as nn
 import torch.utils.data
@@ -27,6 +28,18 @@ from models.Transformers.CNNModel2 import CNN
 from models.Transformers.models import *
 from models.Transformers.BertCustom import BertCustom
 
+from utils.utils import *
+
+class CreateDataset(Dataset):
+    def __init__(self,data,atten_mask,labels,num_excl):
+        self._dataset = [[data[i],atten_mask[i],labels[i],num_excl[i]] for i in range(0,len(data))]
+    
+    def __len__(self):
+        return len(self._dataset)
+
+    def __getitem__(self,idx):
+        return self._dataset[idx]
+
 def tokenize(text):
     ''' Returns tokenized IDs and attention mask
     The transformers encode_plus method returns the following:
@@ -41,8 +54,6 @@ def tokenize(text):
 
     tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
 
-    print("token1")
-
     encoded = tokenizer.encode_plus(
                         text, 
                         add_special_tokens=True,
@@ -51,52 +62,47 @@ def tokenize(text):
 
     tokens = torch.tensor(encoded['input_ids'])
     attention_mask = torch.tensor(encoded['attention_mask'])
-    print("token3")
     return tokens,attention_mask
 
-def run_eval(tokens, attn_mask, label, exclamationCount, model):
-    print("eval1")
-   
-    model.eval()
-    with torch.no_grad():
-        exclamationCount = exclamationCount.type(torch.float)
-        outputs = model(tokens.to(device), exclamationCount.to(device),
-                        token_type_ids=None,
-                        attention_mask=attn_mask.to(device),
-                        labels=label.to(device))
+def classifyWithThreshold(preds,labels):
+    pass
+    pred_after_sigmoid = torch.sigmoid(preds) # Apply the sigmoid to the logits from output of Bert
+    pred_probs,pred_classes = torch.max(pred_after_sigmoid,dim=-1)
+    return pred_probs,pred_classes
 
-    y_pred = outputs
-    print("eval2")
+def run_eval(input, model, device):
+    for step, (x_batch, attn_mask,y_batch,num_excl_batch) in enumerate(input):
+        model.eval()
+        with torch.no_grad():
+            num_excl_batch = num_excl_batch.type(torch.float)
+            outputs = model(x_batch.to(device), num_excl_batch.to(device),token_type_ids=None,attention_mask=attn_mask.to(device),labels=y_batch.to(device))
 
-    predicted_prob,predicted_label = BertModel.classifyWithThreshold(y_pred,label)
+        y_pred = outputs
+        predicted_prob,predicted_label = classifyWithThreshold(y_pred,y_batch)
 
     return predicted_prob,predicted_label
 
-def predict_comment(textinfo):
+def predict_comment(device, model, textinfo):
     label=0
-    label_text="NOT SARCASTIC"
+    label_text="NON-SARCASTIC"
     exclamationNum = textinfo.count("!")
 
-    # commentlist.append(textinfo)
     if (textinfo.find("\s") != -1):
-        print("found!")
         textinfo.replace("\s", "")
         label=1
         label_text="SARCASTIC"
 
-    print("predict1")
     tokens, attention_mask = tokenize(textinfo)
-    # input = [tokens, attention_mask, sarcastic, exclamationNum]
-    predicted_prob,predicted_label = run_eval(tokens, attention_mask, sarcastic, exclamationNum, model)
-    print("predict2")
+    input = CreateDataset([tokens], [attention_mask], [label], [exclamationNum])
+    new_input = generateDataLoader(input, 1)
 
-    if (predicted_label == 1):
-        predicted_text = "SARCASTIC"
-    else:
-        predicted_text = "NOT SARCASTIC"
+    predicted_prob,predicted_label = run_eval(new_input, model, device)
+    predicted_prob = predicted_prob.item()
+    predicted_text = "SARCASTIC" if predicted_label.item() == 1 else "NOT SARCASTIC"
+    predicted_prob = predicted_prob if predicted_label.item() == 1 else 1.0-predicted_prob
 
-    print("OUTPUT: For " + label_text + " comment, predicted it is " + predicted_text + " with " + predicted_prob + "% confidence")
-    print("COMMENT: " + textinfo + "\n")
+    print("OUTPUT: For this " + label_text + " comment, we predicted it is " + predicted_text + " with {:.2f}% confidence".format(predicted_prob))
+    print("COMMENT: " + textinfo + "\n-----------------------------------------------------------")
 
 def main(argv):
     subreddit_name = "politics"
@@ -110,31 +116,29 @@ def main(argv):
         sys.exit(2)
     for opt, arg in opts:
         if opt == '-h':
-            print ('test.py -s <subreddit>')
+            print ('test.py -s <subreddit> -n <number of comments>')
             sys.exit()
         elif opt in ("-s", "--subreddit"):
             subreddit = arg
         elif opt in ("-n", "--iterations"):
             numComments = arg
    
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda')
     model = torch.load("/root/trained_model.pt")
-    print("part1")
 
     reddit = praw.Reddit(client_id='kH0hImI7NwEKoQ',
                          client_secret='VWc4D0SPuZSALQ267bfILDhzSMk',
                          user_agent='script:ucb-w251-project:v0.1 (by u/enex)')
 
     subreddit = reddit.subreddit(subreddit_name)
-    print("part2")
 
     for submission in subreddit.hot(limit=numComments):
         submission.comments.replace_more()
         commentlist = []
-        print("part3")
 
     for comment in submission.comments:
-        predict_comment(comment.body)
+        predict_comment(device, model, comment.body)
 
 if __name__ == "__main__":
    main(sys.argv[1:])
