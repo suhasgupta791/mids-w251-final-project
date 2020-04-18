@@ -1,5 +1,9 @@
-# mids-w251-final-project
-Shared team repository for MIDS W251 Spring 2020 final project
+## Automatic Sarcasm Detection in Long-Form Forum Comments
+**Shared team repository for MIDS W251 Spring 2020 final project**
+
+Automatic sarcasm detection is a difficult problem for machines because the exact same sentence can be interpreted both literally and sarcastically depending on the context and opinions of the author. It is a task that humans have a lot of difficulty detecting as well, with many commenters commonly using the ‘\s’ tag to directly indicate when they are actually being sarcastic on social media. What typically helps humans identify sarcasm is the context that the statement was made in and any incongruity of the sarcastic statement with its context. In our dataset, we started with using the Self-Annotated Reddit Corpus (SARC) dataset (https://nlp.cs.princeton.edu/SARC/2.0/)  and further augmented this data with manually retrieved records. While past papers on sarcasm detection informed our modeling approach, we leveraged recent advances in Transfer Learning and utilized HuggingFacePre-Trained BERT (https://github.com/huggingface/transformers) Transformer architecture to build our classification model.
+
+----------------------------------------------------------
 
 ### Running Training
  
@@ -12,3 +16,5 @@ Shared team repository for MIDS W251 Spring 2020 final project
 ### Running Inference
 
  - Coming Soon !
+ ----------------------------------------------------------
+
