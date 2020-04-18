@@ -7,14 +7,19 @@ Automatic sarcasm detection is a difficult problem for machines because the exac
 
 ### Running Training
  
- - Build the docker image with docker/PYTORCH.build file (name image pytorch_cuda)
+ - Build the docker image with docker/PYTORCH.build file
  - Run the docker container headless using sudo docker/docker_run.sh (Container is named w251-project)
  - Update parameters as desired in run_train.sh file 
- - Launch training : sudo docker exec w251-project /bin/bash -c "./run_train.sh" 
+ - Launch training : ```sudo docker exec w251-project /bin/bash -c "./run_train.sh" ```
 
 
 ### Running Inference
 
- - Coming Soon !
+ - Build the docker image with docker/dockerfile_jetson file
+ - Run the docker container headless using sudo docker/docker_run_jetson.sh (Container is named w251-project)
+ - Launch prediction app using : 
+  ``` sudo docker exec w251-project /bin/bash -c "python preduct.py" ```
+  
+ 
  ----------------------------------------------------------
 
