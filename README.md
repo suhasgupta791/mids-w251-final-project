@@ -18,7 +18,7 @@ Automatic sarcasm detection is a difficult problem for machines because the exac
  - Build the docker image with docker/dockerfile_jetson file
  - Run the docker container headless using sudo docker/docker_run_jetson.sh (Container is named w251-project)
  - Launch prediction app using : 
-  ``` sudo docker exec w251-project /bin/bash -c "python preduct.py" ```
+  ``` sudo docker exec w251-project /bin/bash -c "python client.py" ```
   
  
  ----------------------------------------------------------
